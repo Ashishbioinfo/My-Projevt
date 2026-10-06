@@ -44,8 +44,15 @@ def _preview_flowable(
         content.append(_paragraph("Preview unavailable", body_style))
         return content
 
+    source_image = PillowImage.fromarray(image)
+    output_long_edge = max(640, *source_image.size)
+    scale = output_long_edge / max(source_image.size)
+    output_size = tuple(max(1, round(size * scale)) for size in source_image.size)
+    if output_size != source_image.size:
+        source_image = source_image.resize(output_size, resample=PillowImage.Resampling.LANCZOS)
+
     image_stream = BytesIO()
-    PillowImage.fromarray(image).save(image_stream, format="PNG")
+    source_image.save(image_stream, format="PNG")
     image_stream.seek(0)
     image_streams.append(image_stream)
     report_image = Image(image_stream)

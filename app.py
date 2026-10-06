@@ -191,19 +191,25 @@ def make_map(overlay: np.ndarray, bounds: list[list[float]], center: tuple[float
 
 
 def zoom_preview(image: np.ndarray, zoom_factor: float) -> np.ndarray:
-    """Center-crop and resample an RGB preview to provide synchronized zoom."""
-    if zoom_factor <= 1:
-        return image
-
+    """Center-crop and smoothly resample an RGB preview for map display."""
     height, width = image.shape[:2]
-    crop_height = max(1, round(height / zoom_factor))
-    crop_width = max(1, round(width / zoom_factor))
-    top = (height - crop_height) // 2
-    left = (width - crop_width) // 2
-    crop = image[top : top + crop_height, left : left + crop_width]
-    rows = np.rint(np.linspace(0, crop_height - 1, height)).astype(np.intp)
-    columns = np.rint(np.linspace(0, crop_width - 1, width)).astype(np.intp)
-    return crop[rows[:, None], columns[None, :]]
+    if zoom_factor > 1:
+        crop_height = max(1, round(height / zoom_factor))
+        crop_width = max(1, round(width / zoom_factor))
+        top = (height - crop_height) // 2
+        left = (width - crop_width) // 2
+        image = image[top : top + crop_height, left : left + crop_width]
+
+    crop_height, crop_width = image.shape[:2]
+    output_long_edge = max(512, crop_height, crop_width)
+    output_height = max(1, round(output_long_edge * crop_height / max(crop_height, crop_width)))
+    output_width = max(1, round(output_long_edge * crop_width / max(crop_height, crop_width)))
+    return np.asarray(
+        PillowImage.fromarray(image).resize(
+            (output_width, output_height),
+            resample=PillowImage.Resampling.LANCZOS,
+        )
+    )
 
 
 def enlarge_candidate_crop(image: np.ndarray, patch: dict[str, int | float | str]) -> np.ndarray:
@@ -315,6 +321,7 @@ def add_zone_report_download(
     candidate_patches: list[dict[str, object]] | None = None,
     anomaly_image_pairs: list[dict[str, object]] | None = None,
     analysis_note: str | None = None,
+    download_label: str = "Download zone report PDF",
 ) -> None:
     t1_image, t1_metadata, _t1_error = scene_results[0]
     t2_image, t2_metadata, _t2_error = scene_results[1]
@@ -347,7 +354,7 @@ def add_zone_report_download(
     )
     report_name = f"{_slug(area_name)}_T1-{t1_date.isoformat()}_T2-{t2_date.isoformat()}_report.pdf"
     st.download_button(
-        "Download zone report PDF",
+        download_label,
         data=pdf_bytes,
         file_name=report_name,
         mime="application/pdf",
@@ -482,6 +489,19 @@ if not coordinates:
 imagery_request = st.session_state.get("imagery_request")
 if not imagery_request or imagery_request["area_key"] != area_key:
     st.info("No imagery loaded.")
+    add_zone_report_download(
+        corporation_name,
+        city_name,
+        selected_area_name,
+        float(coordinates["latitude"]),
+        float(coordinates["longitude"]),
+        t1_input,
+        t2_input,
+        [(None, None, "Imagery has not been loaded."), (None, None, "Imagery has not been loaded.")],
+        zoom_input,
+        analysis_note="Imagery has not been loaded. Apply the analysis parameters in the sidebar to generate a report with Sentinel-2 images.",
+        download_label="Download preliminary PDF (no imagery)",
+    )
     st.stop()
 
 t1_date = date.fromisoformat(imagery_request["t1_date"])
@@ -541,7 +561,8 @@ for column, label, target_date, result in (
             cloud_label = "unknown" if cloud_cover is None else f"{cloud_cover:.1f}%"
             processing_level = metadata.get("processing_level", "L2A surface reflectance")
             st.caption(
-                f"Sentinel-2 {processing_level} · acquired {metadata['acquired']} · "
+                f"Sentinel-2 MSI true color (B04/B03/B02) · {processing_level} · 10 m ground sampling distance · "
+                f"acquired {metadata['acquired']} · "
                 f"cloud cover {cloud_label} · {metadata['scene_id']}"
             )
             st_folium(
