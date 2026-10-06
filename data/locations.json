@@ -1,0 +1,25 @@
+{
+  "corporations": [
+    {
+      "name": "Nagpur",
+      "hide_city_selector": true,
+      "cities": [
+        {
+          "name": "Nagpur",
+          "zones": [
+            {"name": "Laxmi Nagar (Zone 1)", "coordinates": {"latitude": 21.1215, "longitude": 79.0645}, "villages": []},
+            {"name": "Dharampeth (Zone 2)", "coordinates": {"latitude": 21.1438, "longitude": 79.0621}, "villages": []},
+            {"name": "Hanuman Nagar (Zone 3)", "coordinates": {"latitude": 21.1189, "longitude": 79.0982}, "villages": []},
+            {"name": "Dhantoli (Zone 4)", "coordinates": {"latitude": 21.1405, "longitude": 79.0838}, "villages": []},
+            {"name": "Nehru Nagar (Zone 5)", "coordinates": {"latitude": 21.1284, "longitude": 79.1176}, "villages": []},
+            {"name": "Gandhi Baugh (Zone 6)", "coordinates": {"latitude": 21.1542, "longitude": 79.1023}, "villages": []},
+            {"name": "Sataranjipura (Zone 7)", "coordinates": {"latitude": 21.1620, "longitude": 79.1161}, "villages": []},
+            {"name": "Lakadganj (Zone 8)", "coordinates": {"latitude": 21.1504, "longitude": 79.1292}, "villages": []},
+            {"name": "Ashi Nagar (Zone 9)", "coordinates": {"latitude": 21.1895, "longitude": 79.1084}, "villages": []},
+            {"name": "Mangalwari (Zone 10)", "coordinates": {"latitude": 21.1764, "longitude": 79.0718}, "villages": []}
+          ]
+        }
+      ]
+    }
+  ]
+}

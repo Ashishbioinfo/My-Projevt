@@ -45,7 +45,7 @@ These fixed-threshold indicators are screening signals only. Crop cycles, bare s
 
 T1/T2 and candidate layers are shown in separate Leaflet maps. The zone and anomaly table/PDF provide links that open the current Google satellite view separately. Google links do not provide historical Google imagery for the selected T1/T2 dates, and Google imagery is not embedded or copied into the PDF. A village-level model detection mask still requires configured village rasters and a trained model.
 
-After loading T1 and T2, use **Download zone report PDF** below the monitoring result. The report includes the selected zone, target/acquisition dates, scene IDs, and overview images. Each qualifying anomaly also gets a T1 crop, a T2 crop, coordinates, approximate area, and a link to its current Google satellite view. All qualifying patches are listed; isolated single-pixel noise is excluded. Google imagery is linked, not copied into the PDF. Spectral and model candidates are not legal determinations.
+After loading T1 and T2, use **Download zone report PDF** below the monitoring result. Page one shows the T1/T2 overview images and only the total anomaly count. Following pages include scene details and the area summary, then each qualifying anomaly's coordinates, approximate area, surrounding-context T1/T2 crops with a red candidate outline, a current Google satellite link, and the municipal permit-verification notice. All qualifying patches are listed; isolated single-pixel noise is excluded. Google imagery is linked, not copied into the PDF. Spectral and model candidates are not legal determinations. Sentinel-2's 10 m sampling limits building-level detail; sharper inspection requires licensed high-resolution imagery.
 
 ## Train from Sentinel-2 L2A
 
