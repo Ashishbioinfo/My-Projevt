@@ -149,7 +149,7 @@ def create_zone_report_pdf(
     )
     image_streams: list[BytesIO] = []
     preview_width = document.width / 2 - 14
-    preview_height = 270
+    preview_height = 340
     preview_table = Table(
         [
             [
@@ -325,11 +325,11 @@ def create_zone_report_pdf(
                 [[
                     _preview_flowable(
                         anomaly.get("t1_image"), "EPOCH T0 (Sentinel-2 MSI)", body_style,
-                        anomaly_image_width, 205, anomaly_image_streams,
+                        anomaly_image_width, 260, anomaly_image_streams,
                     ),
                     _preview_flowable(
                         anomaly.get("t2_image"), "EPOCH T1 (Sentinel-2 MSI)", body_style,
-                        anomaly_image_width, 205, anomaly_image_streams,
+                        anomaly_image_width, 260, anomaly_image_streams,
                     ),
                 ]],
                 colWidths=[document.width / 2, document.width / 2],
@@ -351,7 +351,7 @@ def create_zone_report_pdf(
                 [
                     comparison,
                     _paragraph(
-                        "The shaded red area and yellow outline mark the candidate. Crops include about 200 m of surrounding context where the image bounds allow. "
+                        "The shaded red area and yellow outline mark the candidate. Crops include about 500 m of surrounding context where the image bounds allow. "
                         "Sentinel-2 samples at 10 m; enlargement improves viewing size but cannot reveal building height or roof details.",
                         muted_style,
                     ),

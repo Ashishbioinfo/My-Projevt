@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent
 REGISTRY_PATH = ROOT / "data" / "locations.json"
 OUTPUT_DIR = ROOT / "outputs"
 SENTINEL_ANALYSIS_CACHE_VERSION = 2
-CANDIDATE_CONTEXT_BUFFER_METERS = 200
+CANDIDATE_CONTEXT_BUFFER_METERS = 500
 
 st.set_page_config(page_title="Construction Watch", page_icon="M", layout="wide")
 st.markdown(
@@ -607,7 +607,7 @@ for column, label, target_date, result in (
                     overlay_name=label,
                     show_basemap=False,
                 ),
-                height=420,
+                height=560,
                 use_container_width=True,
                 key=f"sentinel-{_slug(selected_area_name)}-{label.lower().replace(' ', '-')}",
             )
@@ -783,7 +783,7 @@ if spectral_change is not None:
             overlay_name=change_layer,
             candidate_patches=candidate_patches[:10],
         ),
-        height=420,
+        height=560,
         use_container_width=True,
         key=f"change-{_slug(selected_area_name)}-{_slug(change_layer)}",
     )
