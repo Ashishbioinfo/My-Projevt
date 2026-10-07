@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import importlib.util
+import io
 import json
 import os
 import re
@@ -28,6 +30,7 @@ from rasterio.warp import transform_bounds
 from streamlit_folium import st_folium
 
 from src.detect_construction import predict
+from src.imagery_cache import cached_fetch
 from src.sentinel_imagery import (
     DEFAULT_PREVIEW_RADIUS_KM,
     analyze_l2a_change,
@@ -277,12 +280,28 @@ def _cached_sentinel_preview(
     radius_km: float,
     cache_version: int,
 ) -> tuple[np.ndarray, dict]:
-    return fetch_sentinel_preview(
-        latitude,
-        longitude,
-        date.fromisoformat(target_date),
-        search_window_days,
-        radius_km,
+    # st.cache_data only lives for this process/session and expires after its
+    # TTL; cached_fetch persists the fetched scene to disk so the same
+    # zone/date combination is served from disk on later runs and restarts
+    # instead of re-querying Planetary Computer.
+    fields = {
+        "latitude": round(latitude, 6),
+        "longitude": round(longitude, 6),
+        "target_date": target_date,
+        "search_window_days": search_window_days,
+        "radius_km": radius_km,
+        "cache_version": cache_version,
+    }
+    return cached_fetch(
+        fields,
+        lambda: fetch_sentinel_preview(
+            latitude,
+            longitude,
+            date.fromisoformat(target_date),
+            search_window_days,
+            radius_km,
+        ),
+        name="sentinel2_preview",
     )
 
 
@@ -296,13 +315,26 @@ def _cached_sentinel1_rtc(
     relative_orbit: int | None,
     cache_version: int,
 ) -> dict:
-    return fetch_sentinel1_rtc(
-        latitude,
-        longitude,
-        date.fromisoformat(target_date),
-        search_window_days,
-        radius_km,
-        relative_orbit,
+    fields = {
+        "latitude": round(latitude, 6),
+        "longitude": round(longitude, 6),
+        "target_date": target_date,
+        "search_window_days": search_window_days,
+        "radius_km": radius_km,
+        "relative_orbit": relative_orbit,
+        "cache_version": cache_version,
+    }
+    return cached_fetch(
+        fields,
+        lambda: fetch_sentinel1_rtc(
+            latitude,
+            longitude,
+            date.fromisoformat(target_date),
+            search_window_days,
+            radius_km,
+            relative_orbit,
+        ),
+        name="sentinel1_rtc",
     )
 
 
@@ -794,6 +826,74 @@ if spectral_change is not None:
                 )
             },
             hide_index=True,
+            use_container_width=True,
+        )
+        t1_metadata, t2_metadata = scene_metadata
+        export_rows = []
+        for patch in candidate_patches:
+            patch_id = str(patch["patch_id"])
+            signal = str(patch["signal"])
+            source_id = "-".join(
+                _slug(part)
+                for part in (
+                    corporation_name,
+                    city_name,
+                    selected_area_name,
+                    t1_date.isoformat(),
+                    t2_date.isoformat(),
+                    change_layer,
+                    patch_id,
+                )
+            )
+            t1_acquired = str((t1_metadata or {}).get("acquired", t1_date.isoformat()))
+            t2_acquired = str((t2_metadata or {}).get("acquired", t2_date.isoformat()))
+            sar_note = (
+                f" Sentinel-1 matched descending orbit #{sar_change['relative_orbit']} secondary check "
+                f"used a {sar_change['vv_gain_threshold_db']:.1f} dB VV-gain threshold."
+                if sar_change is not None
+                else " No matched-orbit Sentinel-1 secondary check was available."
+            )
+            evidence = (
+                f"Sentinel-2 L2A {change_layer.lower()} candidate {patch_id} from "
+                f"{corporation_name} / {city_name} / {selected_area_name}. Connected patch: "
+                f"{patch['pixels']} pixels, approximately {float(patch['area_hectares']):.4f} ha. "
+                f"T1 acquired {t1_acquired} ({(t1_metadata or {}).get('scene_id', 'scene ID unavailable')}); "
+                f"T2 acquired {t2_acquired} ({(t2_metadata or {}).get('scene_id', 'scene ID unavailable')})."
+                f"{sar_note} Spectral candidates are screening proxies, not verified construction or legal findings."
+            )
+            export_rows.append(
+                {
+                    "source_id": source_id,
+                    "source_project": "Construction Watch",
+                    "zone_name": selected_area_name,
+                    "address": f"Satellite-screened candidate {patch_id}; street address not provided",
+                    "signal_label": signal,
+                    "latitude": round(float(patch["latitude"]), 7),
+                    "longitude": round(float(patch["longitude"]), 7),
+                    "area_hectares": round(float(patch["area_hectares"]), 6),
+                    "epoch_t0": t1_acquired,
+                    "epoch_t1": t2_acquired,
+                    "signal_index": "",
+                    "evidence_summary": evidence,
+                    "patch_id": patch_id,
+                    "pixel_count": int(patch["pixels"]),
+                    "t1_scene_id": (t1_metadata or {}).get("scene_id", ""),
+                    "t2_scene_id": (t2_metadata or {}).get("scene_id", ""),
+                    "t1_target_date": t1_date.isoformat(),
+                    "t2_target_date": t2_date.isoformat(),
+                }
+            )
+        csv_buffer = io.StringIO(newline="")
+        writer = csv.DictWriter(csv_buffer, fieldnames=list(export_rows[0]))
+        writer.writeheader()
+        writer.writerows(export_rows)
+        st.download_button(
+            "Export candidates to Abhilekh",
+            data=csv_buffer.getvalue().encode("utf-8-sig"),
+            file_name=f"{_slug(selected_area_name)}_{t1_date.isoformat()}_to_{t2_date.isoformat()}_candidates.csv",
+            mime="text/csv",
+            key=f"review-candidates-{_slug(selected_area_name)}-{t1_date.isoformat()}-{t2_date.isoformat()}-{_slug(change_layer)}",
+            help="Download the selected candidate layer, then import the CSV in the Abhilekh analyst queue.",
             use_container_width=True,
         )
         t1_rgb, t2_rgb = scene_results[0][0], scene_results[1][0]
