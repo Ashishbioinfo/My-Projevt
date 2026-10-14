@@ -24,7 +24,29 @@ STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 SENTINEL2_L2A_COLLECTION = "sentinel-2-l2a"
 SENTINEL1_RTC_COLLECTION = "sentinel-1-rtc"
 DEFAULT_PREVIEW_RADIUS_KM = 1.0
+MINIMUM_MAPPING_UNIT_PIXELS = 4
 PROJ_DATA = Path(rasterio.__file__).resolve().parent / "proj_data"
+
+
+def filter_candidate_components(
+    candidate_mask: np.ndarray,
+    min_pixels: int = MINIMUM_MAPPING_UNIT_PIXELS,
+) -> np.ndarray:
+    """Keep eight-connected candidate components meeting the minimum pixel count."""
+    candidate_mask = np.asarray(candidate_mask, dtype=bool)
+    if candidate_mask.ndim != 2:
+        raise ValueError("Candidate masks must be two-dimensional.")
+    if min_pixels < 1:
+        raise ValueError("Minimum candidate size must be at least one pixel.")
+
+    component_labels, _component_count = connected_components(
+        candidate_mask,
+        structure=np.ones((3, 3), dtype=np.uint8),
+    )
+    component_sizes = np.bincount(component_labels.ravel())
+    keep_component = component_sizes >= min_pixels
+    keep_component[0] = False
+    return keep_component[component_labels]
 
 
 def add_metric_scale_control(map_view: folium.Map) -> None:
@@ -147,15 +169,8 @@ def analyze_l2a_change(
         & (ndvi_delta <= built_surface_ndvi_threshold)
     )
     raw_candidates = land_clearing | built_surface_gain
-    component_labels, _component_count = connected_components(
-        raw_candidates,
-        structure=np.ones((3, 3), dtype=np.uint8),
-    )
-    component_sizes = np.bincount(component_labels.ravel())
-    keep_component = component_sizes >= 2
-    keep_component[0] = False
-    keep_pixels = keep_component[component_labels]
-    single_pixel_noise_removed = int(raw_candidates.sum() - keep_pixels.sum())
+    keep_pixels = filter_candidate_components(raw_candidates)
+    pixels_removed_below_mmu = int(raw_candidates.sum() - keep_pixels.sum())
     land_clearing &= keep_pixels
     built_surface_gain &= keep_pixels
     valid_count = int(valid.sum())
@@ -166,7 +181,7 @@ def analyze_l2a_change(
         "valid_pixels": valid_count,
         "land_clearing_pixels": int(land_clearing.sum()),
         "built_surface_gain_pixels": int(built_surface_gain.sum()),
-        "single_pixel_noise_removed": single_pixel_noise_removed,
+        "pixels_removed_below_mmu": pixels_removed_below_mmu,
         "mean_ndvi_delta": float(np.mean(ndvi_delta[valid])) if valid_count else 0.0,
         "mean_ndbi_delta": float(np.mean(ndbi_delta[valid])) if valid_count else 0.0,
         "thresholds": {
@@ -318,7 +333,7 @@ def summarize_candidate_patches(
     land_clearing_mask: np.ndarray,
     built_surface_gain_mask: np.ndarray,
     *,
-    min_pixels: int = 2,
+    min_pixels: int = MINIMUM_MAPPING_UNIT_PIXELS,
     max_patches: int | None = None,
     vertical_structure_mask: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:

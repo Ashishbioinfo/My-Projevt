@@ -33,9 +33,11 @@ from src.detect_construction import predict
 from src.imagery_cache import cached_fetch
 from src.sentinel_imagery import (
     DEFAULT_PREVIEW_RADIUS_KM,
+    MINIMUM_MAPPING_UNIT_PIXELS,
     analyze_l2a_change,
     analyze_sar_vertical_candidates,
     add_metric_scale_control,
+    filter_candidate_components,
     fetch_sentinel_preview,
     fetch_sentinel1_rtc,
     make_sentinel_preview_map,
@@ -46,7 +48,7 @@ from src.zone_report import create_zone_report_pdf
 ROOT = Path(__file__).resolve().parent
 REGISTRY_PATH = ROOT / "data" / "locations.json"
 OUTPUT_DIR = ROOT / "outputs"
-SENTINEL_ANALYSIS_CACHE_VERSION = 2
+SENTINEL_ANALYSIS_CACHE_VERSION = 3
 CANDIDATE_CONTEXT_BUFFER_METERS = 500
 
 st.set_page_config(page_title="Construction Watch", page_icon="M", layout="wide")
@@ -694,6 +696,9 @@ if spectral_change is not None:
 if spectral_change is not None:
     st.subheader("Change candidates")
     st.caption(
+        f"Minimum mapping unit: {MINIMUM_MAPPING_UNIT_PIXELS} connected pixels "
+        f"(approximately {MINIMUM_MAPPING_UNIT_PIXELS * pixel_area_hectares * 10_000:.0f} m² at this resolution). "
+        "Eight-way connectivity includes diagonal neighbors. "
         f"Built-surface gain means NDBI rose by at least {built_surface_ndbi_threshold:.2f} "
         f"while NDVI fell by at least {abs(built_surface_ndvi_threshold):.2f} from T1 to T2. "
         "It is a surface-change signal, not confirmation of a new building."
@@ -711,6 +716,7 @@ if spectral_change is not None:
         change_layer = st.selectbox("Comparison layer", comparison_layers)
     land_clearing_mask = spectral_change["land_clearing_mask"]
     built_surface_mask = spectral_change["built_surface_gain_mask"]
+    combined_candidates = land_clearing_mask | built_surface_mask | vertical_structure_mask
     all_candidate_patches = summarize_candidate_patches(
         land_clearing_mask | built_surface_mask | vertical_structure_mask,
         latitude,
@@ -718,42 +724,45 @@ if spectral_change is not None:
         DEFAULT_PREVIEW_RADIUS_KM,
         land_clearing_mask,
         built_surface_mask,
-        min_pixels=2,
+        min_pixels=MINIMUM_MAPPING_UNIT_PIXELS,
         max_patches=None,
         vertical_structure_mask=vertical_structure_mask,
     )
     candidate_overlay = np.zeros((*land_clearing_mask.shape, 4), dtype=np.uint8)
     if change_layer == "Land-clearing candidates":
-        active_candidates = land_clearing_mask
+        active_candidates = filter_candidate_components(land_clearing_mask)
         selected_clearing_mask = land_clearing_mask
         selected_built_mask = np.zeros_like(built_surface_mask)
         selected_vertical_mask = np.zeros_like(vertical_structure_mask)
         candidate_overlay[active_candidates] = (239, 171, 67, 220)
         legend = "Amber: vegetation-loss spectral candidates"
     elif change_layer == "Built-surface gain candidates":
-        active_candidates = built_surface_mask
+        active_candidates = filter_candidate_components(built_surface_mask)
         selected_clearing_mask = np.zeros_like(land_clearing_mask)
         selected_built_mask = built_surface_mask
         selected_vertical_mask = np.zeros_like(vertical_structure_mask)
         candidate_overlay[active_candidates] = (220, 76, 58, 220)
         legend = "Red: new built/impervious-surface spectral candidates"
     elif change_layer == "SAR-backed vertical-structure candidates":
-        active_candidates = vertical_structure_mask
+        active_candidates = filter_candidate_components(vertical_structure_mask)
         selected_clearing_mask = np.zeros_like(land_clearing_mask)
         selected_built_mask = vertical_structure_mask
         selected_vertical_mask = vertical_structure_mask
         candidate_overlay[active_candidates] = (25, 126, 105, 230)
         legend = "Teal: optical built-surface gain with matched-orbit SAR VV increase >= 4 dB"
     else:
-        active_candidates = land_clearing_mask | built_surface_mask | vertical_structure_mask
+        active_candidates = filter_candidate_components(combined_candidates)
         selected_clearing_mask = land_clearing_mask
         selected_built_mask = built_surface_mask
         selected_vertical_mask = vertical_structure_mask
-        candidate_overlay[land_clearing_mask] = (239, 171, 67, 220)
-        candidate_overlay[built_surface_mask] = (220, 76, 58, 220)
-        candidate_overlay[vertical_structure_mask] = (25, 126, 105, 230)
+        candidate_overlay[land_clearing_mask & active_candidates] = (239, 171, 67, 220)
+        candidate_overlay[built_surface_mask & active_candidates] = (220, 76, 58, 220)
+        candidate_overlay[vertical_structure_mask & active_candidates] = (25, 126, 105, 230)
         legend = "Amber: vegetation loss; red: optical built gain; teal: SAR-backed structure candidates"
 
+    selected_clearing_mask &= active_candidates
+    selected_built_mask &= active_candidates
+    selected_vertical_mask &= active_candidates
     candidate_area_hectares = float(active_candidates.sum()) * pixel_area_hectares
     valid_count = int(spectral_change["valid_pixels"])
     valid_area_hectares = float(valid_count) * pixel_area_hectares
@@ -765,7 +774,7 @@ if spectral_change is not None:
         DEFAULT_PREVIEW_RADIUS_KM,
         selected_clearing_mask,
         selected_built_mask,
-        min_pixels=2,
+        min_pixels=MINIMUM_MAPPING_UNIT_PIXELS,
         max_patches=None,
         vertical_structure_mask=selected_vertical_mask,
     )
@@ -912,7 +921,10 @@ if spectral_change is not None:
             if len(candidate_patches) > 10:
                 st.caption(f"T1/T2 crops shown for 10 largest patches; all {len(candidate_patches)} qualifying patches are listed in the PDF report.")
     else:
-        st.info("No candidate areas met the minimum mapping unit for this comparison layer.")
+        st.info(
+            f"No candidate areas met the {MINIMUM_MAPPING_UNIT_PIXELS}-pixel minimum mapping unit "
+            "for this comparison layer."
+        )
 
 if village is None:
     st.info("Sentinel-2 T1/T2 imagery and spectral change candidates are shown above. Add village-level training data and a trained model for model-based construction detections.")
