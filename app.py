@@ -32,6 +32,7 @@ from streamlit_folium import st_folium
 from src.detect_construction import predict
 from src.imagery_cache import cached_fetch
 from src.sentinel_imagery import (
+    CANDIDATE_IMAGERY_ZOOM,
     DEFAULT_PREVIEW_RADIUS_KM,
     MINIMUM_MAPPING_UNIT_PIXELS,
     analyze_l2a_change,
@@ -40,7 +41,9 @@ from src.sentinel_imagery import (
     filter_candidate_components,
     fetch_sentinel_preview,
     fetch_sentinel1_rtc,
+    fetch_world_imagery_preview,
     make_sentinel_preview_map,
+    make_world_imagery_map,
     summarize_candidate_patches,
 )
 from src.zone_report import create_zone_report_pdf
@@ -340,6 +343,17 @@ def _cached_sentinel1_rtc(
     )
 
 
+@st.cache_data(ttl=86400, max_entries=128, show_spinner=False)
+def _cached_world_imagery_preview(
+    latitude: float,
+    longitude: float,
+) -> tuple[np.ndarray | None, str | None]:
+    try:
+        return fetch_world_imagery_preview(latitude, longitude), None
+    except (OSError, TimeoutError, ValueError) as error:
+        return None, str(error)
+
+
 def add_zone_report_download(
     corporation_name: str,
     city_name: str,
@@ -359,15 +373,24 @@ def add_zone_report_download(
 ) -> None:
     t1_image, t1_metadata, _t1_error = scene_results[0]
     t2_image, t2_metadata, _t2_error = scene_results[1]
-    if t1_image is not None and t2_image is not None and candidate_patches:
-        anomaly_image_pairs = [
-            {
+    if candidate_patches:
+        anomaly_image_pairs = []
+        for patch in candidate_patches:
+            patch_latitude = float(patch["latitude"])
+            patch_longitude = float(patch["longitude"])
+            anomaly = {
                 "patch": patch,
-                "t1_image": enlarge_candidate_crop(t1_image, patch),
-                "t2_image": enlarge_candidate_crop(t2_image, patch),
+                "t1_image": enlarge_candidate_crop(t1_image, patch) if t1_image is not None else None,
+                "t2_image": enlarge_candidate_crop(t2_image, patch) if t2_image is not None else None,
             }
-            for patch in candidate_patches
-        ]
+            current_image, current_image_error = _cached_world_imagery_preview(
+                round(patch_latitude, 6),
+                round(patch_longitude, 6),
+            )
+            anomaly["current_image"] = current_image
+            if current_image_error:
+                anomaly["current_image_error"] = current_image_error
+            anomaly_image_pairs.append(anomaly)
     pdf_bytes = create_zone_report_pdf(
         corporation_name=corporation_name,
         city_name=city_name,
@@ -614,6 +637,19 @@ for column, label, target_date, result in (
                 key=f"sentinel-{_slug(selected_area_name)}-{label.lower().replace(' ', '-')}",
             )
 
+st.subheader("Current high-resolution imagery")
+st.caption(
+    "Esri World Imagery at the selected coordinate. This is the latest imagery available in the basemap, "
+    "not a live feed; coverage, clarity, and capture date vary by location. "
+    "It is shown for visual reference and does not replace or alter the Sentinel-2 T1/T2 analysis."
+)
+st_folium(
+    make_world_imagery_map(latitude, longitude),
+    height=560,
+    use_container_width=True,
+    key=f"world-imagery-{_slug(selected_area_name)}",
+)
+
 scene_metadata = [result[1] for result in scene_results]
 if all(metadata is not None and "analysis_bands" in metadata for metadata in scene_metadata):
     try:
@@ -791,16 +827,18 @@ if spectral_change is not None:
             1.0,
             overlay_name=change_layer,
             candidate_patches=candidate_patches[:10],
+            show_basemap=False,
         ),
         height=560,
         use_container_width=True,
         key=f"change-{_slug(selected_area_name)}-{_slug(change_layer)}",
     )
     st.caption(
-        f"{legend}. {candidate_share:.1f}% of clear land area flagged. "
+        f"{legend}. This map shows the Sentinel-2 change candidates without a satellite basemap. "
+        f"{candidate_share:.1f}% of clear land area flagged. "
         f"Mean ΔNDVI {spectral_change['mean_ndvi_delta']:+.3f}; "
         f"mean ΔNDBI {spectral_change['mean_ndbi_delta']:+.3f}. "
-        "Isolated one-cell speckles are excluded. "
+        f"Only connected groups of {MINIMUM_MAPPING_UNIT_PIXELS} or more pixels are shown. "
         "These are screening proxies, not building-height measurements or a legal determination."
     )
     if sar_change is not None:
@@ -906,20 +944,44 @@ if spectral_change is not None:
             use_container_width=True,
         )
         t1_rgb, t2_rgb = scene_results[0][0], scene_results[1][0]
-        if t1_rgb is not None and t2_rgb is not None:
-            st.markdown("#### Before / after appearance")
-            for patch in candidate_patches[:10]:
-                with st.expander(
-                    f"{patch['patch_id']} · {patch['signal']} · "
-                    f"{float(patch['area_hectares']):.3f} ha · "
-                    f"{float(patch['latitude']):.5f}, {float(patch['longitude']):.5f}"
-                ):
+        st.markdown("#### Candidate location imagery")
+        for patch in candidate_patches[:10]:
+            patch_latitude = float(patch["latitude"])
+            patch_longitude = float(patch["longitude"])
+            patch_key = _slug(str(patch["patch_id"]))
+            with st.expander(
+                f"{patch['patch_id']} · {patch['signal']} · "
+                f"{float(patch['area_hectares']):.3f} ha · "
+                f"{patch_latitude:.5f}, {patch_longitude:.5f}"
+            ):
+                if t1_rgb is not None and t2_rgb is not None:
                     t1_view, t2_view = st.columns(2)
                     t1_view.image(enlarge_candidate_crop(t1_rgb, patch), caption="T1 - Past")
                     t2_view.image(enlarge_candidate_crop(t2_rgb, patch), caption="T2 - Recent")
                     st.caption("Red outline marks the candidate within its surrounding area. Crops are nearest-neighbor enlarged; Sentinel-2's 10 m ground sampling distance cannot resolve building height or roof details.")
-            if len(candidate_patches) > 10:
-                st.caption(f"T1/T2 crops shown for 10 largest patches; all {len(candidate_patches)} qualifying patches are listed in the PDF report.")
+                else:
+                    st.info("T1/T2 candidate crops are unavailable because one or both Sentinel previews could not be loaded.")
+                st.markdown("**Current imagery at candidate coordinates**")
+                st.caption(
+                    f"Latitude {patch_latitude:.6f}, longitude {patch_longitude:.6f}. "
+                    "Esri World Imagery is the latest available basemap imagery, not a live feed."
+                )
+                st_folium(
+                    make_world_imagery_map(
+                        patch_latitude, patch_longitude, CANDIDATE_IMAGERY_ZOOM
+                    ),
+                    height=360,
+                    use_container_width=True,
+                    key=(
+                        f"candidate-world-imagery-{_slug(selected_area_name)}-"
+                        f"{_slug(change_layer)}-{patch_key}"
+                    ),
+                )
+        if len(candidate_patches) > 10:
+            st.caption(
+                f"Imagery cards shown for the 10 largest patches; all {len(candidate_patches)} "
+                "qualifying patches are listed in the PDF report."
+            )
     else:
         st.info(
             f"No candidate areas met the {MINIMUM_MAPPING_UNIT_PIXELS}-pixel minimum mapping unit "

@@ -15,6 +15,8 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Image, LongTable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from src.sentinel_imagery import WORLD_IMAGERY_ATTRIBUTION
+
 
 def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:
     return Paragraph(escape(str(text)), style)
@@ -38,6 +40,7 @@ def _preview_flowable(
     max_width: float,
     max_height: float,
     image_streams: list[BytesIO],
+    image_format: str = "PNG",
 ) -> list[object]:
     content: list[object] = [_paragraph(label, body_style), Spacer(1, 6)]
     if image is None:
@@ -45,6 +48,8 @@ def _preview_flowable(
         return content
 
     source_image = PillowImage.fromarray(image)
+    if image_format == "JPEG":
+        source_image = source_image.convert("RGB")
     output_long_edge = max(640, *source_image.size)
     scale = output_long_edge / max(source_image.size)
     output_size = tuple(max(1, round(size * scale)) for size in source_image.size)
@@ -52,7 +57,8 @@ def _preview_flowable(
         source_image = source_image.resize(output_size, resample=PillowImage.Resampling.LANCZOS)
 
     image_stream = BytesIO()
-    source_image.save(image_stream, format="PNG")
+    save_options = {"quality": 85} if image_format == "JPEG" else {}
+    source_image.save(image_stream, format=image_format, **save_options)
     image_stream.seek(0)
     image_streams.append(image_stream)
     report_image = Image(image_stream)
@@ -355,9 +361,39 @@ def create_zone_report_pdf(
                         "Sentinel-2 samples at 10 m; enlargement improves viewing size but cannot reveal building height or roof details.",
                         muted_style,
                     ),
+                ]
+            )
+            story.extend(
+                _preview_flowable(
+                    anomaly.get("current_image"),
+                    (
+                        f"Current Esri World Imagery · about 200 m across · "
+                        f"coordinates "
+                        f"{float(patch['latitude']):.6f}, {float(patch['longitude']):.6f}"
+                    ),
+                    body_style,
+                    document.width,
+                    230,
+                    anomaly_image_streams,
+                    image_format="JPEG",
+                )
+            )
+            if anomaly.get("current_image_error"):
+                story.append(
+                    _paragraph(
+                        f"Current imagery unavailable: {anomaly['current_image_error']}",
+                        muted_style,
+                    )
+                )
+            story.extend(
+                [
+                    _paragraph(
+                        f"{WORLD_IMAGERY_ATTRIBUTION}. Latest available imagery, not a live feed; capture dates vary by location.",
+                        muted_style,
+                    ),
                     _paragraph(
                         "Permit verification required: check this coordinate against approved municipal "
-                        "building permissions and sanctioned plans before treating the change as unauthorized.",
+                        "building permissions and sanctioned plans before treating this change as unauthorized.",
                         muted_style,
                     ),
                     Spacer(1, 10),

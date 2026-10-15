@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import date, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import numpy as np
 import folium
 import planetary_computer
 import pystac_client
 import rasterio
+from PIL import Image as PillowImage, ImageDraw
 from branca.element import MacroElement
 from folium.plugins import Fullscreen
 from jinja2 import Template
@@ -25,6 +29,9 @@ SENTINEL2_L2A_COLLECTION = "sentinel-2-l2a"
 SENTINEL1_RTC_COLLECTION = "sentinel-1-rtc"
 DEFAULT_PREVIEW_RADIUS_KM = 1.0
 MINIMUM_MAPPING_UNIT_PIXELS = 4
+WORLD_IMAGERY_ATTRIBUTION = "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community"
+WORLD_IMAGERY_PREVIEW_WIDTH_M = 200.0
+CANDIDATE_IMAGERY_ZOOM = 19
 PROJ_DATA = Path(rasterio.__file__).resolve().parent / "proj_data"
 
 
@@ -47,6 +54,99 @@ def filter_candidate_components(
     keep_component = component_sizes >= min_pixels
     keep_component[0] = False
     return keep_component[component_labels]
+
+
+def make_world_imagery_map(
+    latitude: float, longitude: float, zoom_start: int = 16
+) -> folium.Map:
+    """Create a current Esri imagery map centered on the selected location."""
+    map_view = folium.Map(
+        location=[latitude, longitude],
+        zoom_start=zoom_start,
+        tiles=None,
+        control_scale=True,
+    )
+    _add_world_imagery_tiles(map_view)
+    folium.Marker(
+        [latitude, longitude],
+        tooltip=f"Selected location: {latitude:.5f}, {longitude:.5f}",
+    ).add_to(map_view)
+    return map_view
+
+
+def fetch_world_imagery_preview(
+    latitude: float,
+    longitude: float,
+    *,
+    width: int = 720,
+    height: int = 480,
+) -> np.ndarray:
+    """Fetch a static current Esri imagery preview centered on the given coordinate."""
+    if width < 1 or height < 1:
+        raise ValueError("World imagery preview dimensions must be positive.")
+
+    metres_per_degree = 111_320.0
+    longitude_half_extent = (
+        WORLD_IMAGERY_PREVIEW_WIDTH_M / 2 / metres_per_degree
+    ) / np.cos(np.deg2rad(latitude))
+    latitude_half_extent = (
+        WORLD_IMAGERY_PREVIEW_WIDTH_M / 2 * height / width / metres_per_degree
+    )
+    params = {
+        "f": "image",
+        "bbox": ",".join(
+            (
+                f"{longitude - longitude_half_extent:.8f}",
+                f"{latitude - latitude_half_extent:.8f}",
+                f"{longitude + longitude_half_extent:.8f}",
+                f"{latitude + latitude_half_extent:.8f}",
+            )
+        ),
+        "bboxSR": "4326",
+        "imageSR": "4326",
+        "size": f"{width},{height}",
+        "format": "png32",
+        "transparent": "false",
+        "layers": "show:0",
+    }
+    url = (
+        "https://server.arcgisonline.com/ArcGIS/rest/services/"
+        f"World_Imagery/MapServer/export?{urlencode(params)}"
+    )
+    request = Request(url, headers={"User-Agent": "ConstructionWatch/1.0"})
+    with urlopen(request, timeout=20) as response:
+        content_type = response.headers.get("Content-Type", "")
+        if not content_type.startswith("image/"):
+            raise ValueError(f"World imagery service returned unexpected content type: {content_type or 'unknown'}.")
+        image_bytes = response.read()
+
+    with PillowImage.open(BytesIO(image_bytes)) as source_image:
+        image = source_image.convert("RGB")
+    if image.size != (width, height):
+        raise ValueError(
+            f"World imagery service returned {image.width}x{image.height}; expected {width}x{height}."
+        )
+
+    draw = ImageDraw.Draw(image)
+    center = (width // 2, height // 2)
+    draw.ellipse(
+        (center[0] - 9, center[1] - 9, center[0] + 9, center[1] + 9),
+        fill="#dc4c3a",
+        outline="white",
+        width=3,
+    )
+    return np.asarray(image)
+
+
+def _add_world_imagery_tiles(map_view: folium.Map) -> None:
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr=f"Tiles © {WORLD_IMAGERY_ATTRIBUTION.removeprefix('Source: ')}",
+        name="Esri World Imagery",
+        overlay=False,
+        control=False,
+        max_zoom=19,
+    ).add_to(map_view)
 
 
 def add_metric_scale_control(map_view: folium.Map) -> None:
@@ -434,6 +534,7 @@ def make_sentinel_preview_map(
     overlay_name: str = "Sentinel-2 L2A preview",
     candidate_patches: list[dict[str, Any]] | None = None,
     show_basemap: bool = True,
+    show_world_imagery: bool = False,
 ) -> folium.Map:
     """Display a georeferenced RGB chip with a metric 200 px Leaflet scale bar."""
     view_radius_km = radius_km / max(1.0, zoom_factor)
@@ -446,9 +547,11 @@ def make_sentinel_preview_map(
     map_view = folium.Map(
         location=(latitude, longitude),
         zoom_start=16,
-        tiles="OpenStreetMap" if show_basemap else None,
+        tiles="OpenStreetMap" if show_basemap and not show_world_imagery else None,
         control_scale=False,
     )
+    if show_world_imagery:
+        _add_world_imagery_tiles(map_view)
     map_view.options["minZoom"] = 13
     map_view.options["maxZoom"] = 17
     folium.raster_layers.ImageOverlay(
