@@ -33,6 +33,8 @@ $env:PROJ_LIB = (& python -c "import rasterio; print(rasterio.__path__[0])") + "
 
 ## Dashboard
 
+Fetched Sentinel-2, Sentinel-1, and Esri preview imagery is cached in memory only while the dashboard process is running; imagery is not saved to disk.
+
 Nagpur uses the supplied zone coordinates and hides the City selector. Choose a past T1 date and a more recent T2 date; the dashboard searches the public Sentinel-2 L2A catalog near each target date and shows the nearest available scene, including acquisition date and cloud cover. T1 and T2 are interactive Leaflet previews centered on the selected coordinates, each covering a 1 km radius (2 km across). Their metric-only scale bar is capped at 200 px and the map zoom is clamped to levels intended to show about 200 m to 1 km. The change-candidate map shows only detected Sentinel-2 candidates, without a satellite basemap. The separate Esri World Imagery view remains available on each candidate's expanded imagery card, centered at that candidate's coordinates, for visual reference; it is not used in the detection analysis or PDF report. Esri imagery is the latest available in the basemap, not a live feed, and its capture date and clarity vary by location. The Sentinel imagery comparison is a preview, not a trained construction prediction.
 
 The comparison panel also provides exploratory L2A spectral-change layers. It uses the Scene Classification Layer to retain clear land pixels (classes 4 and 5), then shows:

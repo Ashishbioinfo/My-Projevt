@@ -30,7 +30,6 @@ from rasterio.warp import transform_bounds
 from streamlit_folium import st_folium
 
 from src.detect_construction import predict
-from src.imagery_cache import cached_fetch
 from src.sentinel_imagery import (
     CANDIDATE_IMAGERY_ZOOM,
     DEFAULT_PREVIEW_RADIUS_KM,
@@ -51,7 +50,6 @@ from src.zone_report import create_zone_report_pdf
 ROOT = Path(__file__).resolve().parent
 REGISTRY_PATH = ROOT / "data" / "locations.json"
 OUTPUT_DIR = ROOT / "outputs"
-SENTINEL_ANALYSIS_CACHE_VERSION = 3
 CANDIDATE_CONTEXT_BUFFER_METERS = 500
 
 st.set_page_config(page_title="Construction Watch", page_icon="M", layout="wide")
@@ -283,30 +281,13 @@ def _cached_sentinel_preview(
     target_date: str,
     search_window_days: int,
     radius_km: float,
-    cache_version: int,
 ) -> tuple[np.ndarray, dict]:
-    # st.cache_data only lives for this process/session and expires after its
-    # TTL; cached_fetch persists the fetched scene to disk so the same
-    # zone/date combination is served from disk on later runs and restarts
-    # instead of re-querying Planetary Computer.
-    fields = {
-        "latitude": round(latitude, 6),
-        "longitude": round(longitude, 6),
-        "target_date": target_date,
-        "search_window_days": search_window_days,
-        "radius_km": radius_km,
-        "cache_version": cache_version,
-    }
-    return cached_fetch(
-        fields,
-        lambda: fetch_sentinel_preview(
-            latitude,
-            longitude,
-            date.fromisoformat(target_date),
-            search_window_days,
-            radius_km,
-        ),
-        name="sentinel2_preview",
+    return fetch_sentinel_preview(
+        latitude,
+        longitude,
+        date.fromisoformat(target_date),
+        search_window_days,
+        radius_km,
     )
 
 
@@ -318,28 +299,14 @@ def _cached_sentinel1_rtc(
     search_window_days: int,
     radius_km: float,
     relative_orbit: int | None,
-    cache_version: int,
 ) -> dict:
-    fields = {
-        "latitude": round(latitude, 6),
-        "longitude": round(longitude, 6),
-        "target_date": target_date,
-        "search_window_days": search_window_days,
-        "radius_km": radius_km,
-        "relative_orbit": relative_orbit,
-        "cache_version": cache_version,
-    }
-    return cached_fetch(
-        fields,
-        lambda: fetch_sentinel1_rtc(
-            latitude,
-            longitude,
-            date.fromisoformat(target_date),
-            search_window_days,
-            radius_km,
-            relative_orbit,
-        ),
-        name="sentinel1_rtc",
+    return fetch_sentinel1_rtc(
+        latitude,
+        longitude,
+        date.fromisoformat(target_date),
+        search_window_days,
+        radius_km,
+        relative_orbit,
     )
 
 
@@ -596,7 +563,6 @@ with st.spinner("Searching Sentinel-2 L2A scenes and loading zone previews..."):
                 target_date.isoformat(),
                 search_window_days,
                 DEFAULT_PREVIEW_RADIUS_KM,
-                SENTINEL_ANALYSIS_CACHE_VERSION,
             )
             scene_results.append((image, metadata, None))
         except Exception as error:
@@ -679,7 +645,6 @@ if spectral_change is not None:
                 search_window_days,
                 DEFAULT_PREVIEW_RADIUS_KM,
                 None,
-                SENTINEL_ANALYSIS_CACHE_VERSION,
             )
             t2_sar = _cached_sentinel1_rtc(
                 latitude,
@@ -688,7 +653,6 @@ if spectral_change is not None:
                 search_window_days,
                 DEFAULT_PREVIEW_RADIUS_KM,
                 t1_sar["relative_orbit"],
-                SENTINEL_ANALYSIS_CACHE_VERSION,
             )
             sar_change = analyze_sar_vertical_candidates(
                 t1_sar,
